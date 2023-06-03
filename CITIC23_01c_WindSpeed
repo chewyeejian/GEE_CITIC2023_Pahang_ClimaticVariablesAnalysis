@@ -1,0 +1,149 @@
+var all_states = ee.FeatureCollection("users/chew/mys_adm2");
+
+// Perform Frequency Analysis - daily, monthly, annually
+// Country Boundary (all_states) - level 1 can be downloaded from: https://data.humdata.org/dataset/cod-ab-mys
+
+
+// _____Location Selection in Malaysia  via Feature Collection_____
+//MY0805 - Kuantan
+//MY0808 - Pekan
+//MY0810 - Rompin
+
+var pekan_rompin_kuantan = all_states.filter(ee.Filter.or(
+                                    ee.Filter.eq('ADM2_PCODE',"MY0805"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0808"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0810")))
+
+var feature_selected_states = pekan_rompin_kuantan //multipolygon
+var selected_states = pekan_rompin_kuantan //single polygon to reduce computation
+print(feature_selected_states,'feature_selected_states')
+Map.addLayer(feature_selected_states,{color:'808080'},"states")
+Map.centerObject(feature_selected_states,8);
+
+// _____Convert selected location to single polygon to save computation_____
+var selected_states = selected_states.map(function(x){
+  var simpleFeat = x.simplify(1000)
+  var area = simpleFeat.area() // in m2
+  var convex = x.convexHull(1000)
+  var areaConvex = convex.area() // in m2
+  return(convex.copyProperties(x).set({area:area,
+    areaConvex: areaConvex
+  }))
+})
+
+// Find the boundary of multiple polygon
+// print(selected_states.sort('areaConvex', false).limit(3))
+Map.addLayer(selected_states,{}, 'conexHull', false)
+
+// Combine multiple polygon into single polygon through union
+var selected_states = selected_states.union().geometry()
+print(selected_states,'union')
+Map.addLayer(selected_states, {color:'FF0000'}, 'selected_states union single polygon', false, 0.2)
+
+// visualize on screen for temperature
+var dataset_terraclimate = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE')
+                  .filter(ee.Filter.date('2020-10-01', '2021-04-30'));
+
+dataset_terraclimate = dataset_terraclimate.map(function(dataset_terraclimate) { return dataset_terraclimate.clip(selected_states);});
+
+
+// Multiply the value of variables based on the Scale provided by the dataset
+dataset_terraclimate = dataset_terraclimate.map(
+  function(img){
+    var rescaled_tmmx = img.select('tmmx').multiply(0.1)
+    .rename('tmmx_rescaled')
+    return img.addBands(rescaled_tmmx);
+  }
+);
+
+dataset_terraclimate = dataset_terraclimate.map(
+  function(img){
+    var rescaled_pr = img.select('pr').multiply(0.1).rename('pr_rescaled')
+    return img.addBands(rescaled_pr);
+  }
+);
+
+dataset_terraclimate = dataset_terraclimate.map(
+  function(img){
+    var rescaled_vs = img.select('vs').multiply(0.01).rename('vs_rescaled')
+    return img.addBands(rescaled_vs);
+  }
+);
+
+print(dataset_terraclimate)
+
+// Obtain the monthly average / maximum to generate the maps for each moth
+var months = ee.List.sequence(0,5) //(Jan 2001, 2021)
+var maps = ee.ImageCollection(months.map(function(months){
+  var startDate = ee.Date.fromYMD(2020,11,1).advance(months,'month');
+  var endDate = startDate.advance(1, 'month');
+  var myImg = dataset_terraclimate.filter(ee.Filter.date(startDate,endDate)).max()
+  return myImg.set("system:time_start",startDate, 'system:time_end',endDate)
+}))
+print(maps)
+
+// visualization
+var maximumWindSpeedVis = {
+  min:0,max: 4,palette: ['F7F3F0','DFDFDF','496A81','1E96FC','00171F'],
+};
+
+var vis = maximumWindSpeedVis
+var palette = maximumWindSpeedVis
+
+// Display the results of image collection into different layer
+// Start with i = 0, end in i = the size of the image collection -1
+// each step do i = i + 1
+for(var i = 0; i <= maps.size().subtract(1).getInfo(); i++){
+  // Convert image collection to list so you can get images by index.
+  // Need to indicate the size of the image collection to convert to list
+  // Get images in cloudiness order with get
+  // Cast resulting object as image
+  var resul = ee.Image(maps.toList(maps.size()).get(i));
+  // Print to console
+  print('image ' +i, resul);
+  // Add image to Map
+  resul = resul.select(['vs_rescaled'])
+  Map.addLayer(resul, vis, 'Wind-speed '+i);
+}
+
+// Generate Legend
+var legend = ui.Panel({style: {position: 'middle-right',padding: '8px 10px'}});
+var legendTitle = ui.Label({value: 'Wind-speed ',style: {fontWeight: 'bold',fontSize: '15px',margin: '5 0 9px 0',padding: '10'}});
+legend.add(legendTitle);
+var lon = ee.Image.pixelLonLat().select('latitude');
+var gradient = lon.multiply((palette.max-palette.min)/50.0).add(palette.min);
+var legendImage = gradient.visualize(palette);
+var panel = ui.Panel({widgets: [ui.Label(palette['max']+' m/s')],});
+legend.add(panel);
+var thumbnail = ui.Thumbnail({image: legendImage,params: {bbox:'0,0,10,90', dimensions:'20x70'},
+                 style: { padding: '1', position: 'bottom-right'}});
+legend.add(thumbnail);
+var panel = ui.Panel({widgets: [ui.Label(palette['min']+' m/s')],});
+legend.add(panel);
+Map.add(legend)
+
+Map.setCenter(103.14268304656075, 3.295719345162323, 9);
+
+
+// Create legend - horrizontal
+// var legend = ui.Panel({style: {position: 'bottom-right',padding: '8px 10px'},
+//               layout: ui.Panel.Layout.flow('horizontal')
+//             });
+
+// var legendTitle = ui.Label({value: 'Wind Speed ',style: {fontWeight: 'bold',fontSize: '15px',margin: '5 0 9px 0',padding: '10'}});
+// legend.add(legendTitle);
+// var lon = ee.Image.pixelLonLat().select('longitude');
+// var gradient = lon.multiply((palette.max-palette.min)/100.0).add(palette.min);
+// var legendImage = gradient.visualize(palette);
+// var panel = ui.Panel({widgets: [ui.Label(palette['min']+' m/s')],
+//           layout: ui.Panel.Layout.flow('horizontal')
+//           });
+// legend.add(panel);
+// var thumbnail = ui.Thumbnail({image: legendImage,params: {bbox:'0,0,100,10', dimensions:'500x20'},
+//                 style: { padding: '1', position: 'top-center'}});
+// legend.add(thumbnail);
+// var panel = ui.Panel({widgets: [ui.Label(palette['max']+' m/s')],});
+// legend.add(panel);
+// Map.add(legend)
+
+// Map.setCenter(103.14268304656075, 3.295719345162323, 9);

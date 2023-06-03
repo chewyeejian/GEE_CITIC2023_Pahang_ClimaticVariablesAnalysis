@@ -1,0 +1,150 @@
+var all_states = ee.FeatureCollection("users/chew/mys_adm2");
+
+// Perform Frequency Analysis - daily, monthly, annually
+// Country Boundary (all_states) - level 1 can be downloaded from: https://data.humdata.org/dataset/cod-ab-mys
+
+
+// _____Location Selection in Malaysia  via Feature Collection_____
+//MY0805 - Kuantan
+//MY0808 - Pekan
+//MY0810 - Rompin
+
+var pekan_rompin_kuantan = all_states.filter(ee.Filter.or(
+                                    ee.Filter.eq('ADM2_PCODE',"MY0805"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0808"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0810")))
+
+var feature_selected_states = pekan_rompin_kuantan //multipolygon
+var selected_states = pekan_rompin_kuantan //single polygon to reduce computation
+print(feature_selected_states,'feature_selected_states')
+Map.addLayer(feature_selected_states,{color:'808080'},"states")
+Map.centerObject(feature_selected_states,8);
+
+// _____Convert selected location to single polygon to save computation_____
+var selected_states = selected_states.map(function(x){
+  var simpleFeat = x.simplify(1000)
+  var area = simpleFeat.area() // in m2
+  var convex = x.convexHull(1000)
+  var areaConvex = convex.area() // in m2
+  return(convex.copyProperties(x).set({area:area,
+    areaConvex: areaConvex
+  }))
+})
+
+// Find the boundary of multiple polygon
+// print(selected_states.sort('areaConvex', false).limit(3))
+Map.addLayer(selected_states,{}, 'conexHull', false)
+
+// Combine multiple polygon into single polygon through union
+var selected_states = selected_states.union().geometry()
+print(selected_states,'union')
+Map.addLayer(selected_states, {color:'FF0000'}, 'selected_states union single polygon', false, 0.2)
+
+// // _____Analyse 10 years in the selected locations_____
+var start_date = ee.Date("2010-01-01")
+var end_date   = ee.Date("2021-12-31")
+
+// // Load dataset
+var dataset_terraclimate = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE')
+                  .filter(ee.Filter.date(start_date, end_date))
+                  .select(['pr']);
+
+// The native scale of the terraclimate is 4638
+var toBands = dataset_terraclimate.toBands()
+print(toBands)
+// print('crs', firms_toBands.select(0).projection());
+var nativeScale = toBands.select(0).projection().nominalScale().toInt();
+print('Image Scale', nativeScale);
+
+
+// Required to get the average yearly temperature from mean of monthly temperature
+var years = ee.List.sequence(2010,2021)
+var maps = ee.ImageCollection(years.map(function(year){
+  var startDate = ee.Date.fromYMD(year,1,1)
+  var endDate = ee.Date.fromYMD(year,12,31)
+    // count - to get the number of hotspots at the particular location
+    // max - to get the maximum temperature (Kelvin) on the particular location
+  var myImg = dataset_terraclimate.filter(ee.Filter.date(startDate,endDate)).select('pr').mean().multiply(0.1)
+  return myImg.set("system:time_start",startDate, 'system:time_end',endDate)
+}))
+
+print(maps)
+
+
+var chart_year= ui.Chart.image.seriesByRegion({imageCollection:maps,
+                              regions:selected_states,
+                              reducer:ee.Reducer.mean().unweighted(),
+                              scale:nativeScale}).setOptions({
+                                                      title: 'Annual Precipitation  ',
+                                                      vAxis: {title: 'Precipitation (mm)'},
+                                                      hAxis: {title: 'Years'},
+                                                      lineWidth: 1,
+                                                      pointSize: 3,
+                                                      series: {0: {color: 'FF0000'}},
+                                                      // chartArea: {backgroundColor: 'EBEBEB'},
+                                                      explorer: {axis: 'horizontal'},
+                                                      legend: {position: 'none'},
+                              });
+print(chart_year)
+
+// // _____Analyse monthly 10 years in the selected locations_____
+// // Take note on the peak of each year
+
+var dataset_terraclimate = ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE')
+                  .filter(ee.Filter.date(start_date, end_date))
+                  .select(['pr']);
+
+// do not need to get the monthly data because it is already monthly data
+
+// Required to scale based on the scale factor 0.1
+dataset_terraclimate = dataset_terraclimate.map(
+  function(img){
+    var rescaled_pr = img.select('pr').multiply(0.1)
+    .rename('pr_rescaled')
+    return img.addBands(rescaled_pr);
+  }
+);
+print(dataset_terraclimate)
+
+// // // Time series - from 2010 -2021 (one line)
+var chart_year= ui.Chart.image.seriesByRegion({imageCollection:dataset_terraclimate,
+                              regions:selected_states,
+                              reducer:ee.Reducer.mean().unweighted(),
+                              scale:nativeScale,
+                              band:['pr_rescaled']
+                              }).setOptions({
+                                                      title: 'Monthly Precipitation',
+                                                      vAxis: {title: 'Precipitation (mm)'},
+                                                      hAxis: {title: 'Months'},
+                                                      lineWidth: 1,
+                                                      pointSize: 3,
+                                                      series: {0: {color: 'FF0000'}},
+                                                      // chartArea: {backgroundColor: 'EBEBEB'},
+                                                      explorer: {axis: 'horizontal'},
+                                                      legend: {position: 'none'},
+                              });
+print(chart_year)
+
+
+// // // Time series - from 2000 -2021 (each year one line)
+var chart_year=   ui.Chart.image.doySeriesByYear({
+    imageCollection: dataset_terraclimate,
+    bandName:'pr_rescaled',
+    region: selected_states,
+    regionReducer: ee.Reducer.mean().unweighted(),
+    scale: nativeScale,
+  }).setOptions({
+                                                      // title: 'Monthly Maximum Temperature ',
+                                                      vAxis: {
+                                                        title: 'Precipitation (mm)'
+                                                      },
+                                                      hAxis: {
+                                                        title: 'Day of Year',
+                                                      },
+                                                      lineWidth: 1,
+                                                      pointSize: 3,
+                                                      explorer: {axis: 'horizontal'},
+                                                      interpolateNulls: true,
+                                                      // chartArea: {backgroundColor: 'EBEBEB'},
+                })
+print(chart_year)

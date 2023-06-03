@@ -1,0 +1,57 @@
+var all_states = ee.FeatureCollection("users/chew/mys_adm2");
+
+// Perform Frequency Analysis - daily, monthly, annually
+// Country Boundary (all_states) - level 1 can be downloaded from: https://data.humdata.org/dataset/cod-ab-mys
+
+
+// _____Location Selection in Malaysia  via Feature Collection_____
+//MY0805 - Kuantan
+//MY0808 - Pekan
+//MY0810 - Rompin
+
+var pekan_rompin_kuantan = all_states.filter(ee.Filter.or(
+                                    ee.Filter.eq('ADM2_PCODE',"MY0805"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0808"),
+                                    ee.Filter.eq('ADM2_PCODE',"MY0810")))
+
+var feature_selected_states = pekan_rompin_kuantan //multipolygon
+var selected_states = pekan_rompin_kuantan //single polygon to reduce computation
+print(feature_selected_states,'feature_selected_states')
+Map.addLayer(feature_selected_states,{color:'808080'},"states")
+Map.centerObject(feature_selected_states,8);
+
+// _____Convert selected location to single polygon to save computation_____
+var selected_states = selected_states.map(function(x){
+  var simpleFeat = x.simplify(1000)
+  var area = simpleFeat.area() // in m2
+  var convex = x.convexHull(1000)
+  var areaConvex = convex.area() // in m2
+  return(convex.copyProperties(x).set({area:area,
+    areaConvex: areaConvex
+  }))
+})
+
+// Find the boundary of multiple polygon
+// print(selected_states.sort('areaConvex', false).limit(3))
+Map.addLayer(selected_states,{}, 'conexHull', false)
+
+// Combine multiple polygon into single polygon through union
+var selected_states = selected_states.union().geometry()
+print(selected_states,'union')
+Map.addLayer(selected_states, {color:'FF0000'}, 'selected_states union single polygon', false, 0.2)
+
+// Full set range from 2020 (maximum can set 10 years only for doySeriesByYear, cannot over 5000 images)
+var fire_start = ee.Date("2021-03-01")
+var fire_end = ee.Date("2021-03-31")
+
+// _____ Adding MCD64A1 MODIS Burned Area Monthly GLobal 500m _____
+var dataset_MCD64A1 = ee.ImageCollection('MODIS/061/MCD64A1').select(['BurnDate']).filterDate(fire_start, fire_end)
+dataset_MCD64A1 = dataset_MCD64A1.map(function(mcd64A1) { return mcd64A1.clip(selected_states);});
+
+var burnedAreaVis = {
+  min: 0.0,
+  max: 341.0,
+  opacity: 1,
+  palette: ['4e0400', '951003', 'c61503', 'ff1901'],
+};
+Map.addLayer(dataset_MCD64A1, burnedAreaVis, 'MCD64A1 - Burned Area');
